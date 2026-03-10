@@ -143,7 +143,8 @@ export function usePatternScanner(trendAssets: AssetTrend[] = []) {
 
               const chPatterns = detectChartPatterns(candles);
               for (const p of chPatterns) {
-                const formedAt = candles[p.endIndex]?.time ?? now;
+                const candleTime = (p.endIndex >= 0 && p.endIndex < candles.length) ? candles[p.endIndex].time : 0;
+                const formedAt = candleTime > 0 ? candleTime : (candles[candles.length - 1]?.time ?? now);
                 const { significance, aligned } = adjustSignificance(p.significance, p.type, sym, tf, currentTrends);
                 newChart.push({
                   id: `ch-${symbol}-${tf}-${p.name}-${now}`,
