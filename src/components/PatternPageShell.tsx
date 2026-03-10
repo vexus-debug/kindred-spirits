@@ -274,7 +274,7 @@ function PatternCard({ pattern: dp }: { pattern: DetectedPattern }) {
             </span>
             <span className="flex items-center gap-0.5">
               <Clock className="h-2.5 w-2.5" />
-              {timeAgo}
+              {formedTime}
             </span>
           </div>
           <div className="flex items-center gap-1">
