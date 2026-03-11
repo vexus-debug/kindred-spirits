@@ -91,7 +91,7 @@ export function detectCandlestickPatterns(candles: Candle[], excludeLastCandle =
         type: isBullish(c) ? 'bullish' : 'bearish',
         significance: 'high',
         candleIndex: i,
-        description: 'Strong momentum — no wicks',
+        description: 'Strong momentum — no wicks. Trade in the direction of the candle. Can enter on pullback to candle midpoint with stop at opposite end.',
       });
     }
 
