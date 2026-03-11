@@ -656,6 +656,198 @@ function detectMarketStructure(candles: Candle[]) {
   return events;
 }
 
+// ─── Range Detection ────────────────────────────────────────────────
+interface RangeLevel {
+  upper: number;
+  lower: number;
+  midpoint: number;
+  width: number; // percentage width
+}
+
+function analyzeRange(candles: Candle[], emaPeriods = { fast: 9, slow: 21, mid: 50, long: 200 }, adxThreshold = 25): any {
+  if (candles.length < emaPeriods.long + 10) return null;
+
+  const closes = candles.map(c => c.close);
+  const price = closes[closes.length - 1];
+  const ema9 = calculateEMA(closes, emaPeriods.fast);
+  const ema21 = calculateEMA(closes, emaPeriods.slow);
+  const ema50 = calculateEMA(closes, emaPeriods.mid);
+  const ema200 = calculateEMA(closes, emaPeriods.long);
+  const li = closes.length - 1;
+  const e9 = ema9[li], e21 = ema21[li], e50 = ema50[li], e200 = ema200[li];
+
+  const { adx, plusDI, minusDI } = calculateADX(candles);
+  const rsi = calculateRSI(closes);
+  const bb = calculateBollingerBands(closes);
+  const kc = calculateKeltnerChannels(candles);
+  const donchian = calculateDonchianChannels(candles);
+  const atr = calculateATR(candles);
+  const volumeRatio = calculateVolumeRatio(candles);
+  const isSqueeze = detectSqueeze(bb.upper, bb.lower, kc.upper, kc.lower);
+  const linReg = calculateLinearRegression(closes, 50);
+  const macd = calculateMACD(closes);
+  const stoch = calculateStochastic(candles);
+  const consistency50 = calcTrendConsistency(candles, 50, 20);
+  const priceStructure = analyzePriceStructure(candles);
+
+  // ─── Range Indicators (inverted from trend — we WANT low directional movement) ───
+  const indicators: any[] = [];
+  let rangeScore = 0, totalWeight = 0;
+
+  // 1. ADX < threshold = ranging (weight: 2.5 — most important)
+  const w1 = 2.5;
+  totalWeight += w1;
+  if (adx < 20) { rangeScore += w1; indicators.push({ name: "ADX", signal: "range", value: `${adx.toFixed(0)} (very weak trend)`, confirmed: true, weight: w1 }); }
+  else if (adx < adxThreshold) { rangeScore += w1 * 0.7; indicators.push({ name: "ADX", signal: "range", value: `${adx.toFixed(0)} (weak trend)`, confirmed: true, weight: w1 }); }
+  else { indicators.push({ name: "ADX", signal: "trend", value: `${adx.toFixed(0)} (trending)`, confirmed: false, weight: w1 }); }
+
+  // 2. DI convergence (weight: 1.5)
+  const w2 = 1.5;
+  totalWeight += w2;
+  const diDiff = Math.abs(plusDI - minusDI);
+  if (diDiff < 5) { rangeScore += w2; indicators.push({ name: "DI Spread", signal: "range", value: `${diDiff.toFixed(1)} (converged)`, confirmed: true, weight: w2 }); }
+  else if (diDiff < 10) { rangeScore += w2 * 0.5; indicators.push({ name: "DI Spread", signal: "range", value: `${diDiff.toFixed(1)} (narrow)`, confirmed: true, weight: w2 }); }
+  else { indicators.push({ name: "DI Spread", signal: "trend", value: `${diDiff.toFixed(1)} (wide)`, confirmed: false, weight: w2 }); }
+
+  // 3. Bollinger bandwidth (weight: 2.0)
+  const w3 = 2.0;
+  totalWeight += w3;
+  if (bb.bandwidth < 0.04) { rangeScore += w3; indicators.push({ name: "BB Width", signal: "range", value: `${(bb.bandwidth * 100).toFixed(1)}% (tight)`, confirmed: true, weight: w3 }); }
+  else if (bb.bandwidth < 0.08) { rangeScore += w3 * 0.6; indicators.push({ name: "BB Width", signal: "range", value: `${(bb.bandwidth * 100).toFixed(1)}% (moderate)`, confirmed: true, weight: w3 }); }
+  else { indicators.push({ name: "BB Width", signal: "trend", value: `${(bb.bandwidth * 100).toFixed(1)}% (wide)`, confirmed: false, weight: w3 }); }
+
+  // 4. BB %B near middle (weight: 1.5)
+  const w4 = 1.5;
+  totalWeight += w4;
+  if (bb.percentB > 0.3 && bb.percentB < 0.7) { rangeScore += w4; indicators.push({ name: "BB %B", signal: "range", value: `${(bb.percentB * 100).toFixed(0)}% (mid-band)`, confirmed: true, weight: w4 }); }
+  else { indicators.push({ name: "BB %B", signal: "trend", value: `${(bb.percentB * 100).toFixed(0)}% (extreme)`, confirmed: false, weight: w4 }); }
+
+  // 5. Squeeze (BB inside KC) (weight: 1.8)
+  const w5 = 1.8;
+  totalWeight += w5;
+  if (isSqueeze) { rangeScore += w5; indicators.push({ name: "Squeeze", signal: "range", value: "Active (BB inside KC)", confirmed: true, weight: w5 }); }
+  else { indicators.push({ name: "Squeeze", signal: "neutral", value: "None", confirmed: false, weight: w5 }); }
+
+  // 6. RSI near 50 (weight: 1.3)
+  const w6 = 1.3;
+  totalWeight += w6;
+  if (rsi > 40 && rsi < 60) { rangeScore += w6; indicators.push({ name: "RSI", signal: "range", value: `${rsi.toFixed(0)} (neutral zone)`, confirmed: true, weight: w6 }); }
+  else { indicators.push({ name: "RSI", signal: "trend", value: `${rsi.toFixed(0)} (directional)`, confirmed: false, weight: w6 }); }
+
+  // 7. EMA convergence (weight: 2.0)
+  const w7 = 2.0;
+  totalWeight += w7;
+  const emaSpread = Math.max(e9, e21, e50) - Math.min(e9, e21, e50);
+  const emaSpreadPct = (emaSpread / price) * 100;
+  if (emaSpreadPct < 0.5) { rangeScore += w7; indicators.push({ name: "EMA Spread", signal: "range", value: `${emaSpreadPct.toFixed(2)}% (converged)`, confirmed: true, weight: w7 }); }
+  else if (emaSpreadPct < 1.5) { rangeScore += w7 * 0.5; indicators.push({ name: "EMA Spread", signal: "range", value: `${emaSpreadPct.toFixed(2)}% (narrow)`, confirmed: true, weight: w7 }); }
+  else { indicators.push({ name: "EMA Spread", signal: "trend", value: `${emaSpreadPct.toFixed(2)}% (wide)`, confirmed: false, weight: w7 }); }
+
+  // 8. Linear Regression R² low (weight: 1.5)
+  const w8 = 1.5;
+  totalWeight += w8;
+  if (linReg.rSquared < 0.3) { rangeScore += w8; indicators.push({ name: "Lin Reg R²", signal: "range", value: `${linReg.rSquared.toFixed(2)} (no trend)`, confirmed: true, weight: w8 }); }
+  else if (linReg.rSquared < 0.5) { rangeScore += w8 * 0.5; indicators.push({ name: "Lin Reg R²", signal: "range", value: `${linReg.rSquared.toFixed(2)} (weak fit)`, confirmed: true, weight: w8 }); }
+  else { indicators.push({ name: "Lin Reg R²", signal: "trend", value: `${linReg.rSquared.toFixed(2)} (trending)`, confirmed: false, weight: w8 }); }
+
+  // 9. MACD near zero (weight: 1.2)
+  const w9 = 1.2;
+  totalWeight += w9;
+  const macdNorm = price > 0 ? Math.abs(macd.macd / price) * 100 : 0;
+  if (macdNorm < 0.1) { rangeScore += w9; indicators.push({ name: "MACD", signal: "range", value: `Near zero line`, confirmed: true, weight: w9 }); }
+  else { indicators.push({ name: "MACD", signal: "trend", value: `${macd.macd > 0 ? "+" : ""}${macd.macd.toPrecision(3)}`, confirmed: false, weight: w9 }); }
+
+  // 10. Price structure neutral (weight: 1.5)
+  const w10 = 1.5;
+  totalWeight += w10;
+  if (priceStructure === "neutral") { rangeScore += w10; indicators.push({ name: "Structure", signal: "range", value: "No HH/HL or LH/LL", confirmed: true, weight: w10 }); }
+  else { indicators.push({ name: "Structure", signal: "trend", value: priceStructure === "bull" ? "HH/HL" : "LH/LL", confirmed: false, weight: w10 }); }
+
+  // 11. Low trend consistency (weight: 1.2)
+  const w11 = 1.2;
+  totalWeight += w11;
+  if (consistency50 < 0.55) { rangeScore += w11; indicators.push({ name: "Consistency", signal: "range", value: `${(consistency50 * 100).toFixed(0)}% (choppy)`, confirmed: true, weight: w11 }); }
+  else { indicators.push({ name: "Consistency", signal: "trend", value: `${(consistency50 * 100).toFixed(0)}% (consistent)`, confirmed: false, weight: w11 }); }
+
+  // 12. Stochastic oscillating in mid zone (weight: 1.0)
+  const w12 = 1.0;
+  totalWeight += w12;
+  if (stoch.k > 25 && stoch.k < 75 && Math.abs(stoch.k - stoch.d) < 10) { rangeScore += w12; indicators.push({ name: "Stochastic", signal: "range", value: `K=${stoch.k.toFixed(0)} ~D (oscillating)`, confirmed: true, weight: w12 }); }
+  else { indicators.push({ name: "Stochastic", signal: "trend", value: `K=${stoch.k.toFixed(0)}`, confirmed: false, weight: w12 }); }
+
+  // ─── Determine if ranging ───
+  const scoreRatio = totalWeight > 0 ? rangeScore / totalWeight : 0;
+  if (scoreRatio < 0.45) return null; // not ranging enough
+
+  const confirmedCount = indicators.filter(i => i.confirmed).length;
+
+  // ─── Calculate range bounds ───
+  // Use multiple methods and find consensus
+  const ranges: RangeLevel[] = [];
+
+  // Method 1: Bollinger Bands
+  ranges.push({ upper: bb.upper, lower: bb.lower, midpoint: bb.middle, width: ((bb.upper - bb.lower) / bb.middle) * 100 });
+
+  // Method 2: Donchian Channels
+  ranges.push({ upper: donchian.upper, lower: donchian.lower, midpoint: donchian.middle, width: ((donchian.upper - donchian.lower) / donchian.middle) * 100 });
+
+  // Method 3: Keltner Channels
+  ranges.push({ upper: kc.upper, lower: kc.lower, midpoint: kc.middle, width: ((kc.upper - kc.lower) / kc.middle) * 100 });
+
+  // Method 4: Swing high/low based range
+  const swings = findSwingPoints(candles, 3);
+  const recentHighs = swings.filter(s => s.type === "high").slice(-5).map(s => s.price);
+  const recentLows = swings.filter(s => s.type === "low").slice(-5).map(s => s.price);
+  if (recentHighs.length >= 2 && recentLows.length >= 2) {
+    const avgHigh = recentHighs.reduce((s, v) => s + v, 0) / recentHighs.length;
+    const avgLow = recentLows.reduce((s, v) => s + v, 0) / recentLows.length;
+    ranges.push({ upper: avgHigh, lower: avgLow, midpoint: (avgHigh + avgLow) / 2, width: ((avgHigh - avgLow) / ((avgHigh + avgLow) / 2)) * 100 });
+  }
+
+  // Primary range = average of all methods
+  const primaryUpper = ranges.reduce((s, r) => s + r.upper, 0) / ranges.length;
+  const primaryLower = ranges.reduce((s, r) => s + r.lower, 0) / ranges.length;
+  const primaryMid = (primaryUpper + primaryLower) / 2;
+  const primaryWidth = ((primaryUpper - primaryLower) / primaryMid) * 100;
+
+  // Position within range
+  const rangeSize = primaryUpper - primaryLower;
+  const positionInRange = rangeSize > 0 ? ((price - primaryLower) / rangeSize) * 100 : 50;
+
+  // Strength
+  let strength: "weak" | "moderate" | "strong" = "weak";
+  if (scoreRatio >= 0.75 && confirmedCount >= 9) strength = "strong";
+  else if (scoreRatio >= 0.6 && confirmedCount >= 6) strength = "moderate";
+
+  // Probability
+  let probability = scoreRatio * 70;
+  if (adx < 20) probability += 10;
+  else if (adx < 25) probability += 5;
+  if (isSqueeze) probability += 5;
+  if (bb.bandwidth < 0.04) probability += 5;
+  if (priceStructure === "neutral") probability += 5;
+  probability = Math.max(15, Math.min(95, Math.round(probability)));
+
+  return {
+    isRanging: true,
+    strength,
+    probability,
+    adx, rsi, volumeRatio,
+    ema9: e9, ema21: e21, ema50: e50, ema200: e200,
+    bbBandwidth: bb.bandwidth,
+    squeeze: isSqueeze,
+    confirmations: confirmedCount,
+    totalChecks: indicators.length,
+    indicators,
+    // Range bounds
+    primaryRange: { upper: primaryUpper, lower: primaryLower, midpoint: primaryMid, width: primaryWidth },
+    ranges, // all detected ranges
+    positionInRange, // 0-100, where price is within the range
+    atr,
+    score: Math.round(rangeScore * 4),
+  };
+}
+
 // ─── Main Scanner Logic ─────────────────────────────────────────────
 async function runFullScan(supabase: any) {
   console.log("Starting full scan...");
