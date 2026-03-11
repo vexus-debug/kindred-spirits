@@ -141,7 +141,7 @@ export function detectCandlestickPatterns(candles: Candle[], excludeLastCandle =
 
       // Evening Star
       if (isBullish(prev2) && bodySize(prev) < avg * 0.3 && isBearish(c) && c.close < (prev2.open + prev2.close) / 2) {
-        patterns.push({ name: 'Evening Star', type: 'bearish', significance: 'high', candleIndex: i, description: 'Three-candle bearish reversal' });
+        patterns.push({ name: 'Evening Star', type: 'bearish', significance: 'high', candleIndex: i, description: 'Three-candle bearish reversal (bull → small body → bear). Enter short below third candle low. Stop above pattern high. High reliability at resistance.' });
       }
 
       // Three White Soldiers
