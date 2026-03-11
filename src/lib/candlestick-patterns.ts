@@ -51,9 +51,9 @@ export function detectCandlestickPatterns(candles: Candle[], excludeLastCandle =
 
   // Only check last 3 candles for current patterns
   for (let i = Math.max(2, len - 3); i < len; i++) {
-    const c = candles[i];
-    const prev = candles[i - 1];
-    const prev2 = i >= 2 ? candles[i - 2] : null;
+    const c = data[i];
+    const prev = data[i - 1];
+    const prev2 = i >= 2 ? data[i - 2] : null;
     const r = range(c);
     const body = bodySize(c);
 
