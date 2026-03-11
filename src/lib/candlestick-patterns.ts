@@ -46,8 +46,8 @@ export function detectCandlestickPatterns(candles: Candle[], excludeLastCandle =
   if (data.length < 5) return [];
 
   const patterns: CandlestickPattern[] = [];
-  const len = candles.length;
-  const avg = avgBody(candles, 14);
+  const len = data.length;
+  const avg = avgBody(data, 14);
 
   // Only check last 3 candles for current patterns
   for (let i = Math.max(2, len - 3); i < len; i++) {
