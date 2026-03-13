@@ -149,6 +149,8 @@ function calculateTrendDuration(
     exhaustionRisk,
     exhaustionSignals,
     atrStop,
+    invalidationLevel,
+    invalidationDescription,
   };
 }
 
