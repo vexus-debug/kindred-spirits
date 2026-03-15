@@ -24,20 +24,26 @@ interface TrendEntry {
 }
 
 type SortMode = 'confirmations' | 'probability' | 'volume' | 'change' | 'adx';
+type AccuracyMode = 'all' | 'high' | 'ultra';
 
 export function ScannerMatrix({ assets, scanning, scanProgress, onAddToWatchlist, isWatched }: ScannerMatrixProps) {
   const [search, setSearch] = useState('');
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
   const [filterTf, setFilterTf] = useState<Timeframe | 'all'>('all');
-  const [sortMode, setSortMode] = useState<SortMode>('confirmations');
+  const [sortMode, setSortMode] = useState<SortMode>('probability');
   const [filterSector, setFilterSector] = useState<CryptoSector | 'all'>('all');
   const [filterDirection, setFilterDirection] = useState<'all' | 'bull' | 'bear'>('all');
+  const [accuracyMode, setAccuracyMode] = useState<AccuracyMode>('high');
   const [chartSymbol, setChartSymbol] = useState<string | null>(null);
   const [chartTf, setChartTf] = useState<Timeframe>('60');
 
   // Flatten all assets × timeframes into individual trend entries
   const entries = useMemo(() => {
     const result: TrendEntry[] = [];
+
+    // Accuracy mode thresholds
+    const minProbability = accuracyMode === 'ultra' ? 70 : accuracyMode === 'high' ? 55 : 0;
+    const minConfirmations = accuracyMode === 'ultra' ? 18 : accuracyMode === 'high' ? 12 : 0;
 
     for (const asset of assets) {
       if (search && !asset.symbol.toLowerCase().includes(search.toLowerCase())) continue;
@@ -50,6 +56,11 @@ export function ScannerMatrix({ assets, scanning, scanProgress, onAddToWatchlist
           if (filterDirection !== 'all' && sig.direction !== filterDirection) continue;
           if (sig.confirmations === undefined) sig.confirmations = 0;
           if (sig.totalChecks === undefined) sig.totalChecks = 0;
+
+          // Apply accuracy filters
+          if ((sig.probability ?? 0) < minProbability) continue;
+          if (sig.confirmations < minConfirmations) continue;
+
           result.push({ asset, tf, sig });
         }
       }
@@ -71,7 +82,7 @@ export function ScannerMatrix({ assets, scanning, scanProgress, onAddToWatchlist
     });
 
     return result;
-  }, [assets, search, filterTf, sortMode, filterSector, filterDirection]);
+  }, [assets, search, filterTf, sortMode, filterSector, filterDirection, accuracyMode]);
 
   const bullCount = entries.filter(e => e.sig.direction === 'bull').length;
   const bearCount = entries.length - bullCount;
@@ -136,13 +147,21 @@ export function ScannerMatrix({ assets, scanning, scanProgress, onAddToWatchlist
 
         {/* Filters row */}
         <div className="flex items-center gap-1 flex-wrap">
+          {/* Accuracy filter */}
+          <span className="text-[9px] uppercase text-muted-foreground font-medium">Accuracy:</span>
+          <button onClick={() => setAccuracyMode('all')} className={`rounded px-1.5 py-0.5 text-[9px] transition-colors ${accuracyMode === 'all' ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'}`}>ALL</button>
+          <button onClick={() => setAccuracyMode('high')} className={`rounded px-1.5 py-0.5 text-[9px] transition-colors ${accuracyMode === 'high' ? 'bg-primary/20 text-primary font-bold' : 'text-muted-foreground hover:text-foreground'}`}>⚡ HIGH</button>
+          <button onClick={() => setAccuracyMode('ultra')} className={`rounded px-1.5 py-0.5 text-[9px] transition-colors ${accuracyMode === 'ultra' ? 'bg-accent/20 text-accent font-bold' : 'text-muted-foreground hover:text-foreground'}`}>🎯 ULTRA</button>
+
+          <div className="w-px h-3 bg-border mx-0.5" />
+
           {/* Direction filter */}
           <button onClick={() => setFilterDirection('all')} className={`rounded px-1.5 py-0.5 text-[9px] transition-colors ${filterDirection === 'all' ? 'bg-accent text-accent-foreground' : 'text-muted-foreground hover:text-foreground'}`}>ALL</button>
           <button onClick={() => setFilterDirection('bull')} className={`rounded px-1.5 py-0.5 text-[9px] transition-colors ${filterDirection === 'bull' ? 'bg-primary/20 text-primary' : 'text-muted-foreground hover:text-foreground'}`}>↑ BULL</button>
           <button onClick={() => setFilterDirection('bear')} className={`rounded px-1.5 py-0.5 text-[9px] transition-colors ${filterDirection === 'bear' ? 'bg-destructive/20 text-destructive' : 'text-muted-foreground hover:text-foreground'}`}>↓ BEAR</button>
+        </div>
 
-          <div className="w-px h-3 bg-border mx-0.5" />
-
+        <div className="flex items-center gap-1 flex-wrap">
           {/* TF filter */}
           <span className="text-[9px] uppercase text-muted-foreground">TF:</span>
           <button onClick={() => setFilterTf('all')} className={`rounded px-1.5 py-0.5 text-[9px] transition-colors ${filterTf === 'all' ? 'bg-accent text-accent-foreground' : 'text-muted-foreground hover:text-foreground'}`}>ALL</button>
