@@ -25,7 +25,7 @@ const Dashboard = () => {
         <header className="flex items-center justify-between border-b border-border px-3 py-2">
           <div className="flex items-center gap-2">
             <h1 className="text-xs font-bold uppercase tracking-[0.15em] text-primary">
-              SCANNER
+              TREND SCANNER
             </h1>
             <span className={`h-1.5 w-1.5 rounded-full ${scanning ? 'bg-primary animate-pulse-dot' : 'bg-muted-foreground'}`} />
           </div>
