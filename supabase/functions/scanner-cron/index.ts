@@ -1056,6 +1056,295 @@ async function runFullScan(supabase: any) {
     if (i + BATCH_SIZE < symbols.length) await new Promise(r => setTimeout(r, 50));
   }
 
+  // 2.7. Indicator Signal scan — detect flips, crossovers, breakouts
+  const INDICATOR_TFS: Timeframe[] = ["15", "60", "240", "D"];
+  const indicatorSignalResults: any[] = [];
+
+  for (let i = 0; i < symbols.length; i += BATCH_SIZE) {
+    const batch = symbols.slice(i, i + BATCH_SIZE);
+    await Promise.all(batch.map(async ({ symbol, category, price, change, vol }) => {
+      for (const tf of INDICATOR_TFS) {
+        try {
+          const candles = await fetchKlines(symbol, tf, category, 220);
+          if (candles.length < 60) continue;
+
+          // Current = all closed candles, Previous = exclude last closed candle
+          const curr = candles.slice(0, -1); // closed candles
+          const prev = candles.slice(0, -2); // one bar earlier
+
+          if (curr.length < 55 || prev.length < 55) continue;
+
+          const closesC = curr.map(c => c.close);
+          const closesP = prev.map(c => c.close);
+          const priceNow = closesC[closesC.length - 1];
+          const sym = symbol.replace("USDT", "");
+          const now = Date.now();
+
+          // --- 1. Parabolic SAR Flip ---
+          const psarC = calculateParabolicSAR(curr);
+          const psarP = calculateParabolicSAR(prev);
+          if (psarC.direction !== psarP.direction) {
+            indicatorSignalResults.push({
+              id: `ind-psar-${symbol}-${tf}-${now}`, symbol: sym, timeframe: tf,
+              indicator: "Parabolic SAR Flip", direction: psarC.direction,
+              value: `SAR flipped to ${psarC.direction === "bull" ? "BULLISH" : "BEARISH"}`,
+              price: priceNow, change24h: change, volume24h: vol, timestamp: now,
+              strength: "high",
+            });
+          }
+
+          // --- 2. Supertrend Flip ---
+          const stC = calculateSupertrend(curr);
+          const stP = calculateSupertrend(prev);
+          if (stC.direction !== stP.direction) {
+            indicatorSignalResults.push({
+              id: `ind-st-${symbol}-${tf}-${now}`, symbol: sym, timeframe: tf,
+              indicator: "Supertrend Flip", direction: stC.direction,
+              value: `Supertrend flipped to ${stC.direction === "bull" ? "BULLISH" : "BEARISH"}`,
+              price: priceNow, change24h: change, volume24h: vol, timestamp: now,
+              strength: "high",
+            });
+          }
+
+          // --- 3. MACD Crossover ---
+          const macdC = calculateMACD(closesC);
+          const macdP = calculateMACD(closesP);
+          if ((macdC.histogram > 0 && macdP.histogram <= 0) || (macdC.histogram < 0 && macdP.histogram >= 0)) {
+            const dir = macdC.histogram > 0 ? "bull" : "bear";
+            indicatorSignalResults.push({
+              id: `ind-macd-${symbol}-${tf}-${now}`, symbol: sym, timeframe: tf,
+              indicator: "MACD Crossover", direction: dir,
+              value: `MACD ${dir === "bull" ? "bullish" : "bearish"} crossover (hist: ${macdC.histogram.toPrecision(3)})`,
+              price: priceNow, change24h: change, volume24h: vol, timestamp: now,
+              strength: Math.abs(macdC.histogram) > Math.abs(macdP.histogram) * 1.5 ? "high" : "medium",
+            });
+          }
+
+          // --- 4. Bollinger Band Break ---
+          const bbC = calculateBollingerBands(closesC);
+          const bbP = calculateBollingerBands(closesP);
+          if (bbC.percentB > 1 && bbP.percentB <= 1) {
+            indicatorSignalResults.push({
+              id: `ind-bbu-${symbol}-${tf}-${now}`, symbol: sym, timeframe: tf,
+              indicator: "Bollinger Upper Break", direction: "bull" as const,
+              value: `Price broke above upper BB (%B: ${(bbC.percentB*100).toFixed(0)}%)`,
+              price: priceNow, change24h: change, volume24h: vol, timestamp: now,
+              strength: "high",
+            });
+          }
+          if (bbC.percentB < 0 && bbP.percentB >= 0) {
+            indicatorSignalResults.push({
+              id: `ind-bbl-${symbol}-${tf}-${now}`, symbol: sym, timeframe: tf,
+              indicator: "Bollinger Lower Break", direction: "bear" as const,
+              value: `Price broke below lower BB (%B: ${(bbC.percentB*100).toFixed(0)}%)`,
+              price: priceNow, change24h: change, volume24h: vol, timestamp: now,
+              strength: "high",
+            });
+          }
+
+          // --- 5. RSI Extreme Entry ---
+          const rsiC = calculateRSI(closesC);
+          const rsiP = calculateRSI(closesP);
+          if (rsiC > 70 && rsiP <= 70) {
+            indicatorSignalResults.push({
+              id: `ind-rsio-${symbol}-${tf}-${now}`, symbol: sym, timeframe: tf,
+              indicator: "RSI Overbought", direction: "bear" as const,
+              value: `RSI entered overbought zone (${rsiC.toFixed(1)})`,
+              price: priceNow, change24h: change, volume24h: vol, timestamp: now,
+              strength: rsiC > 80 ? "high" : "medium",
+            });
+          }
+          if (rsiC < 30 && rsiP >= 30) {
+            indicatorSignalResults.push({
+              id: `ind-rsis-${symbol}-${tf}-${now}`, symbol: sym, timeframe: tf,
+              indicator: "RSI Oversold", direction: "bull" as const,
+              value: `RSI entered oversold zone (${rsiC.toFixed(1)})`,
+              price: priceNow, change24h: change, volume24h: vol, timestamp: now,
+              strength: rsiC < 20 ? "high" : "medium",
+            });
+          }
+
+          // --- 6. Stochastic Crossover ---
+          const stochC = calculateStochastic(curr);
+          const stochP = calculateStochastic(prev);
+          if (stochC.k > stochC.d && stochP.k <= stochP.d && stochC.k < 30) {
+            indicatorSignalResults.push({
+              id: `ind-stochb-${symbol}-${tf}-${now}`, symbol: sym, timeframe: tf,
+              indicator: "Stochastic Bullish Cross", direction: "bull" as const,
+              value: `%K crossed above %D in oversold (K:${stochC.k.toFixed(0)} D:${stochC.d.toFixed(0)})`,
+              price: priceNow, change24h: change, volume24h: vol, timestamp: now,
+              strength: stochC.k < 20 ? "high" : "medium",
+            });
+          }
+          if (stochC.k < stochC.d && stochP.k >= stochP.d && stochC.k > 70) {
+            indicatorSignalResults.push({
+              id: `ind-stochs-${symbol}-${tf}-${now}`, symbol: sym, timeframe: tf,
+              indicator: "Stochastic Bearish Cross", direction: "bear" as const,
+              value: `%K crossed below %D in overbought (K:${stochC.k.toFixed(0)} D:${stochC.d.toFixed(0)})`,
+              price: priceNow, change24h: change, volume24h: vol, timestamp: now,
+              strength: stochC.k > 80 ? "high" : "medium",
+            });
+          }
+
+          // --- 7. EMA Cross (9/21) ---
+          const ema9C = calculateEMA(closesC, 9);
+          const ema21C = calculateEMA(closesC, 21);
+          const ema9P = calculateEMA(closesP, 9);
+          const ema21P = calculateEMA(closesP, 21);
+          const e9c = ema9C[ema9C.length - 1], e21c = ema21C[ema21C.length - 1];
+          const e9p = ema9P[ema9P.length - 1], e21p = ema21P[ema21P.length - 1];
+          if (e9c > e21c && e9p <= e21p) {
+            indicatorSignalResults.push({
+              id: `ind-emaxb-${symbol}-${tf}-${now}`, symbol: sym, timeframe: tf,
+              indicator: "EMA 9/21 Golden Cross", direction: "bull" as const,
+              value: `EMA9 crossed above EMA21`,
+              price: priceNow, change24h: change, volume24h: vol, timestamp: now,
+              strength: "high",
+            });
+          }
+          if (e9c < e21c && e9p >= e21p) {
+            indicatorSignalResults.push({
+              id: `ind-emaxs-${symbol}-${tf}-${now}`, symbol: sym, timeframe: tf,
+              indicator: "EMA 9/21 Death Cross", direction: "bear" as const,
+              value: `EMA9 crossed below EMA21`,
+              price: priceNow, change24h: change, volume24h: vol, timestamp: now,
+              strength: "high",
+            });
+          }
+
+          // --- 8. CCI Extreme ---
+          const cciC = calculateCCI(curr);
+          const cciP = calculateCCI(prev);
+          if (cciC > 100 && cciP <= 100) {
+            indicatorSignalResults.push({
+              id: `ind-cciu-${symbol}-${tf}-${now}`, symbol: sym, timeframe: tf,
+              indicator: "CCI Overbought", direction: "bull" as const,
+              value: `CCI crossed above +100 (${cciC.toFixed(0)})`,
+              price: priceNow, change24h: change, volume24h: vol, timestamp: now,
+              strength: cciC > 200 ? "high" : "medium",
+            });
+          }
+          if (cciC < -100 && cciP >= -100) {
+            indicatorSignalResults.push({
+              id: `ind-ccid-${symbol}-${tf}-${now}`, symbol: sym, timeframe: tf,
+              indicator: "CCI Oversold", direction: "bear" as const,
+              value: `CCI crossed below -100 (${cciC.toFixed(0)})`,
+              price: priceNow, change24h: change, volume24h: vol, timestamp: now,
+              strength: cciC < -200 ? "high" : "medium",
+            });
+          }
+
+          // --- 9. Williams %R Extreme ---
+          const wrC = calculateWilliamsR(curr);
+          const wrP = calculateWilliamsR(prev);
+          if (wrC > -20 && wrP <= -20) {
+            indicatorSignalResults.push({
+              id: `ind-wru-${symbol}-${tf}-${now}`, symbol: sym, timeframe: tf,
+              indicator: "Williams %R Overbought", direction: "bear" as const,
+              value: `%R entered overbought (${wrC.toFixed(0)})`,
+              price: priceNow, change24h: change, volume24h: vol, timestamp: now,
+              strength: "medium",
+            });
+          }
+          if (wrC < -80 && wrP >= -80) {
+            indicatorSignalResults.push({
+              id: `ind-wrd-${symbol}-${tf}-${now}`, symbol: sym, timeframe: tf,
+              indicator: "Williams %R Oversold", direction: "bull" as const,
+              value: `%R entered oversold (${wrC.toFixed(0)})`,
+              price: priceNow, change24h: change, volume24h: vol, timestamp: now,
+              strength: "medium",
+            });
+          }
+
+          // --- 10. MFI Extreme ---
+          const mfiC = calculateMFI(curr);
+          const mfiP = calculateMFI(prev);
+          if (mfiC > 80 && mfiP <= 80) {
+            indicatorSignalResults.push({
+              id: `ind-mfio-${symbol}-${tf}-${now}`, symbol: sym, timeframe: tf,
+              indicator: "MFI Overbought", direction: "bear" as const,
+              value: `MFI entered overbought (${mfiC.toFixed(0)})`,
+              price: priceNow, change24h: change, volume24h: vol, timestamp: now,
+              strength: "medium",
+            });
+          }
+          if (mfiC < 20 && mfiP >= 20) {
+            indicatorSignalResults.push({
+              id: `ind-mfis-${symbol}-${tf}-${now}`, symbol: sym, timeframe: tf,
+              indicator: "MFI Oversold", direction: "bull" as const,
+              value: `MFI entered oversold (${mfiC.toFixed(0)})`,
+              price: priceNow, change24h: change, volume24h: vol, timestamp: now,
+              strength: "medium",
+            });
+          }
+
+          // --- 11. Ichimoku Cloud Break ---
+          const ichC = calculateIchimoku(curr);
+          const ichP = calculateIchimoku(prev);
+          if (ichC.priceVsCloud === "above" && ichP.priceVsCloud !== "above") {
+            indicatorSignalResults.push({
+              id: `ind-ichu-${symbol}-${tf}-${now}`, symbol: sym, timeframe: tf,
+              indicator: "Ichimoku Cloud Breakout", direction: "bull" as const,
+              value: `Price broke above Ichimoku cloud`,
+              price: priceNow, change24h: change, volume24h: vol, timestamp: now,
+              strength: ichC.cloudDirection === "bull" ? "high" : "medium",
+            });
+          }
+          if (ichC.priceVsCloud === "below" && ichP.priceVsCloud !== "below") {
+            indicatorSignalResults.push({
+              id: `ind-ichd-${symbol}-${tf}-${now}`, symbol: sym, timeframe: tf,
+              indicator: "Ichimoku Cloud Breakdown", direction: "bear" as const,
+              value: `Price broke below Ichimoku cloud`,
+              price: priceNow, change24h: change, volume24h: vol, timestamp: now,
+              strength: ichC.cloudDirection === "bear" ? "high" : "medium",
+            });
+          }
+
+          // --- 12. Donchian Breakout ---
+          const donC = calculateDonchianChannels(curr);
+          const donP = calculateDonchianChannels(prev);
+          if (donC.breakoutUp && !donP.breakoutUp) {
+            indicatorSignalResults.push({
+              id: `ind-donu-${symbol}-${tf}-${now}`, symbol: sym, timeframe: tf,
+              indicator: "Donchian Breakout Up", direction: "bull" as const,
+              value: `Price broke above ${donC.upper.toPrecision(5)} Donchian high`,
+              price: priceNow, change24h: change, volume24h: vol, timestamp: now,
+              strength: "high",
+            });
+          }
+          if (donC.breakoutDown && !donP.breakoutDown) {
+            indicatorSignalResults.push({
+              id: `ind-dond-${symbol}-${tf}-${now}`, symbol: sym, timeframe: tf,
+              indicator: "Donchian Breakout Down", direction: "bear" as const,
+              value: `Price broke below ${donC.lower.toPrecision(5)} Donchian low`,
+              price: priceNow, change24h: change, volume24h: vol, timestamp: now,
+              strength: "high",
+            });
+          }
+
+          // --- 13. Squeeze Release ---
+          const kcC = calculateKeltnerChannels(curr);
+          const kcP = calculateKeltnerChannels(prev);
+          const sqC = detectSqueeze(bbC.upper, bbC.lower, kcC.upper, kcC.lower);
+          const sqP = detectSqueeze(bbP.upper, bbP.lower, kcP.upper, kcP.lower);
+          if (!sqC && sqP) {
+            const dir = priceNow > bbC.middle ? "bull" : "bear";
+            indicatorSignalResults.push({
+              id: `ind-sqr-${symbol}-${tf}-${now}`, symbol: sym, timeframe: tf,
+              indicator: "Squeeze Release", direction: dir,
+              value: `BB-KC squeeze released — ${dir === "bull" ? "bullish" : "bearish"} expansion`,
+              price: priceNow, change24h: change, volume24h: vol, timestamp: now,
+              strength: "high",
+            });
+          }
+
+        } catch { /* skip */ }
+      }
+    }));
+    if (i + BATCH_SIZE < symbols.length) await new Promise(r => setTimeout(r, 50));
+  }
+
+
   // 3. Pattern scan
   const candlestickResults: any[] = [];
   const chartResults: any[] = [];
