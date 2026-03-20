@@ -60,6 +60,7 @@ const App = () => (
                   <Route path="/sector-rotation" element={<SectorRotation />} />
                   <Route path="/sectors" element={<SectorRotation />} />
                   <Route path="/indicator-scanner" element={<IndicatorScanner />} />
+                  <Route path="/reversals" element={<ReversalScanner />} />
                 </Route>
                 <Route path="*" element={<NotFound />} />
               </Routes>
